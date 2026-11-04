@@ -35,6 +35,8 @@ struct SettingsView: View {
             Divider()
             otherUsersSection
             Divider()
+            notificationsSection
+            Divider()
             workflowFilterSection
             Divider()
             installationsSection
@@ -113,6 +115,22 @@ struct SettingsView: View {
                 .toggleStyle(.checkbox)
                 .font(.subheadline)
             Text("Show recent workflow runs from anyone in the selected repositories.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .settingsSectionPadding()
+    }
+
+    private var notificationsSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle("Notify when a run starts", isOn: $appState.notifyOnRunStart)
+                .toggleStyle(.checkbox)
+                .font(.subheadline)
+            Toggle("Notify when a run finishes", isOn: $appState.notifyOnRunCompletion)
+                .toggleStyle(.checkbox)
+                .font(.subheadline)
+            Text("Show a system notification when a workflow run begins or ends.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

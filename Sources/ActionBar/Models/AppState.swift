@@ -26,6 +26,8 @@ final class AppState: ObservableObject {
     @Published var workflowFilterText = ""
     @Published var maxRunsPerRepo = AppState.defaultMaxRunsPerRepo
     @Published var includeRunsFromOtherUsers = false
+    @Published var notifyOnRunStart = false
+    @Published var notifyOnRunCompletion = true
     @Published private(set) var overallStatus: RunStatus = .unknown
 
     private let apiClient = GitHubAPIClient()
@@ -45,6 +47,8 @@ final class AppState: ObservableObject {
         static let workflowFilterText = "workflowFilterText"
         static let maxRunsPerRepo = "maxRunsPerRepo"
         static let includeRunsFromOtherUsers = "includeRunsFromOtherUsers"
+        static let notifyOnRunStart = "notifyOnRunStart"
+        static let notifyOnRunCompletion = "notifyOnRunCompletion"
     }
 
     private var hasRepoConfiguration: Bool {
@@ -136,7 +140,7 @@ final class AppState: ObservableObject {
         workflowFilterText = ""
         maxRunsPerRepo = Self.defaultMaxRunsPerRepo
         includeRunsFromOtherUsers = false
-        // The polling interval is a device preference, so it survives signing out.
+        // The polling interval and notification choices are device preferences, so they survive signing out.
         for key in [
             DefaultsKey.selectedRepos,
             DefaultsKey.workflowFilterMode,
@@ -281,6 +285,7 @@ final class AppState: ObservableObject {
             let visibleRuns = workflowFilteredRuns.limited(toRunsPerRepo: maxRunsPerRepo)
 
             if hasLoadedOnce {
+                notifyStartedRuns(in: visibleRuns)
                 notifyCompletedRuns(in: visibleRuns)
             }
             previousRunStatuses = [:]
@@ -302,8 +307,17 @@ final class AppState: ObservableObject {
         if manageLoading { isLoading = false }
     }
 
+    /// Notifies about runs that are queued or in progress and were not in the previous fetch.
+    private func notifyStartedRuns(in newRuns: [WorkflowRun]) {
+        guard notifyOnRunStart else { return }
+        for run in newRuns where ["in_progress", "queued"].contains(run.status) && previousRunStatuses[run.id] == nil {
+            NotificationService.sendStartNotification(run: run)
+        }
+    }
+
     /// Notifies about runs that were queued or in progress on the previous fetch and have now completed.
     private func notifyCompletedRuns(in newRuns: [WorkflowRun]) {
+        guard notifyOnRunCompletion else { return }
         for run in newRuns where run.status == "completed" {
             if let previousStatus = previousRunStatuses[run.id], ["in_progress", "queued"].contains(previousStatus) {
                 NotificationService.sendCompletionNotification(run: run)
@@ -331,6 +345,8 @@ final class AppState: ObservableObject {
         maxRunsPerRepo = savedMaxRuns > 0 ? savedMaxRuns : Self.defaultMaxRunsPerRepo
 
         includeRunsFromOtherUsers = defaults.bool(forKey: DefaultsKey.includeRunsFromOtherUsers)
+        notifyOnRunStart = defaults.bool(forKey: DefaultsKey.notifyOnRunStart)
+        notifyOnRunCompletion = defaults.object(forKey: DefaultsKey.notifyOnRunCompletion) as? Bool ?? true
     }
 
     /// Persists the settings edited in the settings panel. The polling interval is saved as soon as it changes.
@@ -340,6 +356,8 @@ final class AppState: ObservableObject {
         defaults.set(workflowFilterText, forKey: DefaultsKey.workflowFilterText)
         defaults.set(maxRunsPerRepo, forKey: DefaultsKey.maxRunsPerRepo)
         defaults.set(includeRunsFromOtherUsers, forKey: DefaultsKey.includeRunsFromOtherUsers)
+        defaults.set(notifyOnRunStart, forKey: DefaultsKey.notifyOnRunStart)
+        defaults.set(notifyOnRunCompletion, forKey: DefaultsKey.notifyOnRunCompletion)
     }
 
     private func saveSelectedRepos() {
