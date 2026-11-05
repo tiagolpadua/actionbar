@@ -208,6 +208,14 @@ struct SettingsView: View {
                 .disabled(appState.isLoadingRepos)
             }
 
+            Toggle("List all repositories (no \(GitHubAPIClient.maxRepositories) limit)", isOn: $appState.unlimitedRepoList)
+                .toggleStyle(.checkbox)
+                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onChange(of: appState.unlimitedRepoList) {
+                    appState.fetchAvailableRepos(force: true)
+                }
+
             TextField("Search repos...", text: $searchText)
                 .textFieldStyle(.roundedBorder)
                 .font(.caption)
@@ -238,8 +246,15 @@ struct SettingsView: View {
                 .disabled(appState.selectedRepoNames == appState.repoSelectionSnapshot)
             }
 
+            if appState.repoListIsPartial {
+                Text("The repository list is incomplete: loading stopped early, possibly due to GitHub rate limits. Refresh to retry.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             if appState.repoListIsCapped {
-                Text("Only the first \(GitHubAPIClient.maxRepositories) repositories are shown.")
+                Text("Only the first \(GitHubAPIClient.maxRepositories) repositories are shown. Enable \"List all repositories\" to see more.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -252,13 +267,27 @@ struct SettingsView: View {
         .settingsSectionPadding()
     }
 
+    /// GitHub allows roughly this many requests per hour for a user token.
+    private static let hourlyRequestBudget = 5000
+
+    private var selectAllWarningText: String {
+        let count = filteredRepos.count
+        let perHour = Int(3600 / appState.pollingInterval) * count
+        var text = "Each selected repo requires a separate API call on every refresh. "
+            + "Selecting \(count) repos at this refresh interval means about \(perHour.formatted()) requests per hour."
+        if perHour > Self.hourlyRequestBudget {
+            text += " That exceeds GitHub's limit of about \(Self.hourlyRequestBudget.formatted()) per hour, so you will be rate limited. Select fewer repos or use a longer interval."
+        }
+        return text
+    }
+
     private var selectAllWarning: some View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 12))
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Each selected repo requires a separate API call on every refresh. Selecting many repos will slow things down.")
+                Text(selectAllWarningText)
                     .font(.caption2)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {

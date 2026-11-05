@@ -18,6 +18,8 @@ final class AppState: ObservableObject {
     @Published var availableRepos: [Repository] = []
     @Published var isLoadingRepos = false
     @Published var repoListIsCapped = false
+    @Published var repoListIsPartial = false
+    @Published var unlimitedRepoList = false
     @Published var showingSettings = false
     @Published var needsInstallation = false
     @Published var isCheckingInstallation = false
@@ -49,6 +51,7 @@ final class AppState: ObservableObject {
         static let includeRunsFromOtherUsers = "includeRunsFromOtherUsers"
         static let notifyOnRunStart = "notifyOnRunStart"
         static let notifyOnRunCompletion = "notifyOnRunCompletion"
+        static let unlimitedRepoList = "unlimitedRepoList"
     }
 
     private var hasRepoConfiguration: Bool {
@@ -135,6 +138,7 @@ final class AppState: ObservableObject {
         selectedRepoNames = []
         availableRepos = []
         repoListIsCapped = false
+        repoListIsPartial = false
         showingSettings = false
         workflowFilterMode = .off
         workflowFilterText = ""
@@ -347,6 +351,7 @@ final class AppState: ObservableObject {
         includeRunsFromOtherUsers = defaults.bool(forKey: DefaultsKey.includeRunsFromOtherUsers)
         notifyOnRunStart = defaults.bool(forKey: DefaultsKey.notifyOnRunStart)
         notifyOnRunCompletion = defaults.object(forKey: DefaultsKey.notifyOnRunCompletion) as? Bool ?? true
+        unlimitedRepoList = defaults.bool(forKey: DefaultsKey.unlimitedRepoList)
     }
 
     /// Persists the settings edited in the settings panel. The polling interval is saved as soon as it changes.
@@ -358,6 +363,7 @@ final class AppState: ObservableObject {
         defaults.set(includeRunsFromOtherUsers, forKey: DefaultsKey.includeRunsFromOtherUsers)
         defaults.set(notifyOnRunStart, forKey: DefaultsKey.notifyOnRunStart)
         defaults.set(notifyOnRunCompletion, forKey: DefaultsKey.notifyOnRunCompletion)
+        defaults.set(unlimitedRepoList, forKey: DefaultsKey.unlimitedRepoList)
     }
 
     private func saveSelectedRepos() {
@@ -396,9 +402,11 @@ final class AppState: ObservableObject {
         isLoadingRepos = true
         Task {
             // On failure, keep whatever list we had before.
-            if let repos = try? await apiClient.fetchAllRepos(token: token) {
-                availableRepos = repos
-                repoListIsCapped = repos.count >= GitHubAPIClient.maxRepositories
+            let limit = unlimitedRepoList ? nil : GitHubAPIClient.maxRepositories
+            if let result = try? await apiClient.fetchAllRepos(token: token, limit: limit) {
+                availableRepos = result.repos
+                repoListIsCapped = result.isCapped
+                repoListIsPartial = result.isPartial
             }
             isLoadingRepos = false
         }

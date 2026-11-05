@@ -23,8 +23,16 @@ enum GitHubAPIError: Error, LocalizedError {
     }
 }
 
+struct RepoListResult {
+    let repos: [Repository]
+    /// The list was cut at the requested limit, so more repositories may exist.
+    let isCapped: Bool
+    /// Loading stopped early (e.g. rate limited), so the list is incomplete.
+    let isPartial: Bool
+}
+
 actor GitHubAPIClient {
-    /// Upper bound on repositories listed for selection (and polled when nothing is selected).
+    /// Default upper bound on repositories listed for selection, and always the bound for polling when nothing is selected.
     static let maxRepositories = 200
 
     private static let baseURL = "https://api.github.com"
@@ -76,7 +84,7 @@ actor GitHubAPIClient {
         if let repoNames {
             repoFullNames = repoNames
         } else {
-            repoFullNames = try await fetchAllRepos(token: token).map(\.fullName)
+            repoFullNames = try await fetchAllRepos(token: token, limit: Self.maxRepositories).repos.map(\.fullName)
         }
 
         let (allRuns, errors) = await withTaskGroup(of: Result<[WorkflowRun], Error>.self) { group in
@@ -178,55 +186,79 @@ actor GitHubAPIClient {
         try await !fetchInstallations(token: token).isEmpty
     }
 
-    func fetchAllRepos(token: String) async throws -> [Repository] {
+    /// Lists accessible repositories, sorted by name. Pass `limit: nil` for no limit.
+    /// If a page fails after some repositories were loaded, the partial list is returned with `isPartial` set.
+    func fetchAllRepos(token: String, limit: Int?) async throws -> RepoListResult {
+        let cap = limit ?? .max
         let installations = try await fetchInstallations(token: token)
         var allRepos: [Repository] = []
+        var isPartial = false
 
-        for installation in installations where allRepos.count < Self.maxRepositories {
-            allRepos += try await fetchAllPages(
+        for installation in installations where allRepos.count < cap {
+            let result = try await fetchAllPages(
                 InstallationRepositoriesResponse.self,
                 path: "/user/installations/\(installation.id)/repositories",
                 token: token,
-                limit: Self.maxRepositories - allRepos.count
+                limit: cap - allRepos.count,
+                keepPartialResults: true
             )
+            allRepos += result.items
+            if result.failed {
+                // Nothing loaded at all is a plain failure; otherwise keep what we have.
+                if allRepos.isEmpty { throw result.error ?? GitHubAPIError.invalidResponse(0) }
+                isPartial = true
+                break
+            }
         }
 
         let sorted = allRepos.sorted { $0.fullName.localizedCaseInsensitiveCompare($1.fullName) == .orderedAscending }
-        return Array(sorted.prefix(Self.maxRepositories))
+        return RepoListResult(
+            repos: Array(sorted.prefix(cap)),
+            isCapped: limit != nil && allRepos.count >= cap,
+            isPartial: isPartial
+        )
     }
 
     private func fetchInstallations(token: String) async throws -> [AppInstallation] {
-        try await fetchAllPages(InstallationsResponse.self, path: "/user/installations", token: token)
+        try await fetchAllPages(InstallationsResponse.self, path: "/user/installations", token: token).items
     }
 
     // MARK: - Requests
 
     /// Follows `page` numbers until every item (or at least `limit` items) has been fetched.
+    /// With `keepPartialResults`, a failing page ends the loop instead of throwing; `failed` reports it.
     private func fetchAllPages<Response: PaginatedResponse>(
         _ type: Response.Type,
         path: String,
         token: String,
-        limit: Int = .max
-    ) async throws -> [Response.Item] {
+        limit: Int = .max,
+        keepPartialResults: Bool = false
+    ) async throws -> (items: [Response.Item], failed: Bool, error: Error?) {
         var items: [Response.Item] = []
         var page = 1
 
         while items.count < limit {
-            let response = try await get(
-                type,
-                path: path,
-                queryItems: [
-                    URLQueryItem(name: "per_page", value: "\(Self.pageSize)"),
-                    URLQueryItem(name: "page", value: "\(page)"),
-                ],
-                token: token
-            )
+            let response: Response
+            do {
+                response = try await get(
+                    type,
+                    path: path,
+                    queryItems: [
+                        URLQueryItem(name: "per_page", value: "\(Self.pageSize)"),
+                        URLQueryItem(name: "page", value: "\(page)"),
+                    ],
+                    token: token
+                )
+            } catch {
+                guard keepPartialResults else { throw error }
+                return (items, true, error)
+            }
             items += response.items
             if items.count >= response.totalCount || response.items.count < Self.pageSize { break }
             page += 1
         }
 
-        return items
+        return (items, false, nil)
     }
 
     private func get<T: Decodable>(
